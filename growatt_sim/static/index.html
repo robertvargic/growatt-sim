@@ -1,0 +1,973 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Growatt simulator</title>
+<link rel="icon" href="data:,">
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface: #fcfcfb; --field: #ffffff;
+  --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7;
+  --border: rgba(11,11,11,.10); --border-strong: rgba(11,11,11,.22);
+  --accent: #2a78d6; --accent-ink: #ffffff;
+  --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100;
+  --good: #0ca30c; --warning: #fab219; --critical: #d03b3b;
+  --read-wash: rgba(42,120,214,.20); --write-wash: rgba(235,104,52,.28);
+  --bad-wash: rgba(208,59,59,.09); --warn-wash: rgba(250,178,25,.16);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --field: #111110;
+    --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835;
+    --border: rgba(255,255,255,.10); --border-strong: rgba(255,255,255,.24);
+    --accent: #3987e5;
+    --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500;
+    --read-wash: rgba(57,135,229,.28); --write-wash: rgba(217,89,38,.34);
+    --bad-wash: rgba(208,59,59,.16); --warn-wash: rgba(250,178,25,.12);
+  }
+}
+* { box-sizing: border-box; }
+html { font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+body { margin: 0; background: var(--page); color: var(--ink); }
+[hidden] { display: none !important; }
+button, input, select { font: inherit; }
+.mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+
+.top { position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center;
+  padding: 10px 16px; background: var(--surface); border-bottom: 1px solid var(--border); }
+h1 { font-size: 16px; margin: 0; font-weight: 650; }
+h1 span { font-weight: 400; color: var(--ink-2); }
+.pills { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; min-width: 0; }
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border: 1px solid var(--border);
+  border-radius: 999px; font-size: 12.5px; color: var(--ink-2); max-width: 100%; }
+.pill span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pill .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+.pill[data-tone=good] .dot { background: var(--good); }
+.pill[data-tone=warn] .dot { background: var(--warning); }
+.pill[data-tone=bad] .dot { background: var(--critical); }
+
+main { display: grid; grid-template-columns: minmax(330px, 410px) minmax(0, 1fr); gap: 16px; padding: 16px;
+  max-width: 1600px; margin: 0 auto; align-items: start; }
+@media (max-width: 940px) { main { grid-template-columns: minmax(0, 1fr); } }
+.col { display: grid; gap: 16px; min-width: 0; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; min-width: 0; }
+h2 { font-size: 13px; font-weight: 650; margin: 0 0 10px; }
+details.card > summary { cursor: pointer; font-size: 13px; font-weight: 650; }
+details.card[open] > summary { margin-bottom: 10px; }
+h3 { font-size: 12px; font-weight: 600; color: var(--ink-2); margin: 14px 0 4px; }
+.hint { color: var(--ink-2); font-size: 12.5px; margin: 6px 0 0; }
+
+.btn { border: 1px solid var(--border-strong); background: var(--field); color: var(--ink); border-radius: 7px;
+  padding: 5px 12px; cursor: pointer; }
+.btn:hover { border-color: var(--accent); }
+.btn.small { padding: 3px 9px; font-size: 12.5px; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+input[type=number], input[type=text], select { color: var(--ink); background: var(--field);
+  border: 1px solid var(--border-strong); border-radius: 6px; padding: 3px 6px; min-width: 0; }
+input[type=number] { width: 86px; text-align: right; }
+input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; margin: 0; }
+input[type=range] { accent-color: var(--accent); width: 100%; min-width: 0; margin: 0; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.inp { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.inp em { font-style: normal; color: var(--ink-2); font-size: 12.5px; min-width: 14px; }
+
+/* Inverter read-out */
+.wb { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; }
+.wb-icon { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; font-size: 17px;
+  color: #fff; background: var(--muted); flex: none; }
+.wb[data-tone=good] .wb-icon { background: var(--good); }
+.wb[data-tone=warn] .wb-icon { background: var(--warning); color: #0b0b0b; }
+.wb[data-tone=bad] .wb-icon { background: var(--critical); }
+.wb-name { font-size: 20px; font-weight: 650; line-height: 1.2; }
+.wb-sub { color: var(--ink-2); font-size: 12.5px; }
+.tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-bottom: 12px; }
+.tile { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; min-width: 0; }
+.tile-l { font-size: 12px; color: var(--ink-2); }
+.tile-l .key { margin-right: 5px; }
+.tile-v { font-size: 19px; font-weight: 650; white-space: nowrap; }
+.tile-v small { font-size: 12px; font-weight: 400; color: var(--ink-2); }
+.tile-s { font-size: 11.5px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.facts { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3px 12px; margin: 0; font-size: 13px; }
+.facts dt { color: var(--ink-2); }
+.facts dd { margin: 0; }
+.notices { display: grid; gap: 6px; margin-top: 10px; }
+.notices:empty { display: none; }
+.notice { display: flex; gap: 8px; align-items: baseline; padding: 6px 9px; border-radius: 7px; font-size: 12.5px;
+  background: var(--warn-wash); }
+.notice.bad { background: var(--bad-wash); }
+.notice.info { background: transparent; border: 1px solid var(--border); }
+.notice .btn { margin-left: auto; flex: none; }
+
+/* Controls */
+.presets { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.slide { display: grid; grid-template-columns: 96px minmax(0, 1fr) auto; gap: 10px; align-items: center; margin: 7px 0; }
+.slide label { color: var(--ink-2); font-size: 13px; line-height: 1.2; }
+.slide label small { display: block; color: var(--muted); font-size: 11.5px; }
+.slide input[type=number] { width: 72px; }
+.row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 8px 0; }
+.row > label, .row > .lbl { width: 96px; color: var(--ink-2); font-size: 13px; flex: none; }
+.set { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 0;
+  border-top: 1px solid var(--grid); }
+.set-l { display: grid; min-width: 0; }
+.set-l small { color: var(--ink-2); font-size: 12px; line-height: 1.35; }
+.set select, .set input[type=text] { max-width: 190px; }
+.slots { width: 100%; border-collapse: collapse; margin: 8px 0 4px; }
+.slots th { font-size: 11.5px; font-weight: 600; color: var(--ink-2); text-align: left; padding: 2px 4px; }
+.slots td { padding: 3px 4px; border-top: 1px solid var(--grid); font-size: 12.5px; white-space: nowrap; }
+.slots select { max-width: 92px; }
+.hhmm { width: 54px; text-align: center; padding: 3px 4px; }
+.slots .st { color: var(--ink-2); }
+.slots tr.active .st { color: var(--ink); font-weight: 600; }
+.form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; }
+.form label { display: grid; gap: 3px; font-size: 12px; color: var(--ink-2); min-width: 0; }
+.form .wide { grid-column: 1 / -1; }
+.form label.check { display: flex; align-items: center; gap: 7px; align-self: end; padding-bottom: 5px; }
+.form input[type=number], .form input[type=text], .form select { width: 100%; text-align: left; }
+.linkstate { margin: 10px 0 0; padding: 6px 9px; border-radius: 7px; font-size: 12.5px; border: 1px solid var(--border);
+  overflow-wrap: anywhere; }
+.linkstate[data-tone=bad] { background: var(--bad-wash); border-color: transparent; }
+
+/* Chart */
+.legend { display: flex; flex-wrap: wrap; gap: 4px 18px; font-size: 12.5px; color: var(--ink-2); margin-bottom: 2px; }
+.legend b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+.key { display: inline-block; width: 14px; height: 2px; border-radius: 1px; vertical-align: middle; margin-right: 6px; }
+.k1 { background: var(--series-1); } .k2 { background: var(--series-2); }
+.k3 { background: var(--series-3); } .k4 { background: var(--series-4); }
+#chart { position: relative; }
+#chart svg { display: block; width: 100%; outline-offset: 2px; }
+#chart .grid { stroke: var(--grid); stroke-width: 1; }
+#chart .axis { stroke: var(--axis); stroke-width: 1; }
+#chart .tick { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+#chart .ptitle { fill: var(--ink-2); font-size: 12px; }
+#chart .ln { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+#chart .s1 { stroke: var(--series-1); } #chart .s2 { stroke: var(--series-2); }
+#chart .s3 { stroke: var(--series-3); } #chart .s4 { stroke: var(--series-4); }
+#chart .cross { stroke: var(--muted); stroke-width: 1; }
+#chart .pt { stroke: var(--surface); stroke-width: 2; }
+#chart .pt.s1 { fill: var(--series-1); } #chart .pt.s2 { fill: var(--series-2); }
+#chart .pt.s3 { fill: var(--series-3); } #chart .pt.s4 { fill: var(--series-4); }
+#tip { position: absolute; top: 4px; pointer-events: none; background: var(--surface); border: 1px solid var(--border-strong);
+  border-radius: 7px; padding: 6px 9px; font-size: 12px; box-shadow: 0 2px 10px rgba(0,0,0,.14); white-space: nowrap; }
+#tip .tip-t { color: var(--ink-2); margin-bottom: 2px; }
+#tip b { font-variant-numeric: tabular-nums; margin-right: 6px; }
+#tip span { color: var(--ink-2); }
+
+/* Registers */
+.scroll-x { overflow-x: auto; }
+table.regs { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+.regs th { font-size: 12px; font-weight: 600; color: var(--ink-2); text-align: left; padding: 4px 8px;
+  border-bottom: 1px solid var(--axis); white-space: nowrap; }
+.regs td { padding: 3px 8px; border-bottom: 1px solid var(--grid); vertical-align: middle; }
+.regs td.addr { color: var(--ink-2); text-align: right; width: 1%; }
+.regs td.name small { display: block; color: var(--muted); font-size: 11.5px; line-height: 1.3; }
+.regs td.val { white-space: nowrap; }
+.regs td.raw, .regs td.act { font-size: 12px; color: var(--ink-2); white-space: nowrap; }
+.regs tr.group td { background: var(--page); font-size: 12px; font-weight: 600; color: var(--ink-2); padding: 5px 8px; }
+.tag { font-size: 10.5px; font-weight: 600; padding: 0 5px; border-radius: 4px; border: 1px solid var(--border-strong);
+  color: var(--ink-2); margin-left: 7px; vertical-align: 1px; white-space: nowrap; }
+.pin { margin-left: 8px; border: 1px solid var(--border-strong); background: var(--warn-wash); color: var(--ink);
+  border-radius: 999px; padding: 1px 9px; font-size: 11.5px; cursor: pointer; }
+.card-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 8px; }
+.card-head h2 { margin: 0; }
+.card-head .spacer { flex: 1; }
+.swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+.rawform { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; font-size: 12.5px; color: var(--ink-2); }
+.rawform input[type=number] { width: 74px; }
+
+/* Traffic */
+.chip { border: 1px solid var(--border-strong); background: var(--field); color: var(--ink-2); border-radius: 999px;
+  padding: 2px 11px; font-size: 12.5px; cursor: pointer; }
+.chip[aria-pressed=true] { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+.check { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink-2); }
+.log { max-height: 520px; overflow: auto; font-size: 12.5px; border-top: 1px solid var(--axis); }
+.log:empty::after { content: "No traffic yet. Wire a Modbus master to the serial link, or run the client's link test.";
+  display: block; padding: 14px 4px; color: var(--ink-2); }
+.log-row { display: grid; grid-template-columns: 88px 54px minmax(0, 1fr) auto; gap: 0 10px; padding: 3px 6px;
+  border-bottom: 1px solid var(--grid); border-left: 3px solid transparent; align-items: baseline; }
+.log-row time { color: var(--muted); font-size: 12px; }
+.log-row .lt { font-size: 10.5px; font-weight: 700; letter-spacing: .04em; color: var(--ink-2); }
+.log-row .txt { overflow-wrap: anywhere; }
+.log-row .what { color: var(--ink-2); margin-right: 8px; }
+.log-row .meta { color: var(--muted); font-size: 11.5px; white-space: nowrap; }
+.log-row .hex { grid-column: 3 / -1; color: var(--muted); font-size: 11.5px; white-space: pre-wrap; overflow-wrap: anywhere; display: none; }
+.show-hex .hex { display: block; }
+.k-read { border-left-color: var(--series-1); }
+.k-write { border-left-color: var(--series-2); }
+.k-error { border-left-color: var(--critical); background: var(--bad-wash); }
+.k-event { color: var(--ink-2); }
+.k-event.lvl-warn { background: var(--warn-wash); color: var(--ink); }
+.hide-read .k-read, .hide-write .k-write, .hide-error .k-error, .hide-event .k-event { display: none; }
+@media (max-width: 640px) { .log-row { grid-template-columns: 88px 44px minmax(0, 1fr); gap: 0 6px; } .log-row .meta { display: none; } }
+
+#toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: var(--ink); color: var(--surface);
+  padding: 8px 14px; border-radius: 8px; font-size: 13px; max-width: 90vw; z-index: 10; }
+</style>
+</head>
+<body>
+<header class="top">
+  <h1>Growatt <span>simulator</span></h1>
+  <div class="pills">
+    <span class="pill" id="pill-link"><i class="dot"></i><span>Serial link</span></span>
+    <span class="pill" id="pill-activity"><i class="dot"></i><span>No request yet</span></span>
+    <span class="pill" id="pill-live"><i class="dot"></i><span>Connecting</span></span>
+  </div>
+  <button class="btn" id="btn-reset" title="Resting state at night: no PV, 400 W load, 50 % SoC, all TOU slots off, nothing pinned">Reset inverter</button>
+</header>
+
+<main>
+  <div class="col">
+    <section class="card" aria-label="Inverter">
+      <div class="wb" id="wb" data-tone="neutral">
+        <div class="wb-icon" id="wb-icon" aria-hidden="true">●</div>
+        <div><div class="wb-name" id="wb-name">…</div><div class="wb-sub" id="wb-sub"></div></div>
+      </div>
+      <div class="tiles">
+        <div class="tile"><div class="tile-l"><i class="key k1"></i>PV</div><div class="tile-v"><span id="t-pv">0.00</span> <small>kW</small></div><div class="tile-s" id="t-pv-s"></div></div>
+        <div class="tile"><div class="tile-l"><i class="key k2"></i>Load</div><div class="tile-v"><span id="t-load">0.00</span> <small>kW</small></div><div class="tile-s" id="t-load-s"></div></div>
+        <div class="tile"><div class="tile-l"><i class="key k4"></i>Battery</div><div class="tile-v"><span id="t-bat">0.00</span> <small>kW</small></div><div class="tile-s" id="t-bat-s"></div></div>
+        <div class="tile"><div class="tile-l"><i class="key k3"></i>Grid</div><div class="tile-v"><span id="t-grid">0.00</span> <small>kW</small></div><div class="tile-s" id="t-grid-s"></div></div>
+      </div>
+      <dl class="facts">
+        <dt>Battery mode</dt><dd id="f-mode"></dd>
+        <dt>Grid charging</dt><dd id="f-gridcharge"></dd>
+        <dt>Charge limit</dt><dd id="f-limit"></dd>
+        <dt>Surplus for the EV</dt><dd id="f-surplus"></dd>
+        <dt>Energy</dt><dd id="f-energy"></dd>
+      </dl>
+      <div class="notices" id="notices"></div>
+    </section>
+
+    <section class="card">
+      <h2>Plant</h2>
+      <div class="presets" id="presets"></div>
+      <div class="slide"><label for="s-pv1_w">PV MPPT1 <small>north roof</small></label><input type="range" id="s-pv1_w" min="0" max="3000" step="50"><span class="inp"><input type="number" id="n-pv1_w" min="0" step="50" aria-label="PV MPPT1 in watts"><em>W</em></span></div>
+      <div class="slide"><label for="s-pv2_w">PV MPPT2 <small>south roof</small></label><input type="range" id="s-pv2_w" min="0" max="7000" step="50"><span class="inp"><input type="number" id="n-pv2_w" min="0" step="50" aria-label="PV MPPT2 in watts"><em>W</em></span></div>
+      <div class="slide"><label for="s-house_w">House load <small>without the car</small></label><input type="range" id="s-house_w" min="0" max="8000" step="50"><span class="inp"><input type="number" id="n-house_w" min="0" step="50" aria-label="House load in watts"><em>W</em></span></div>
+      <div class="slide"><label for="s-ev_w">EV load <small id="ev-note">set by hand</small></label><input type="range" id="s-ev_w" min="0" max="11040" step="10"><span class="inp"><input type="number" id="n-ev_w" min="0" step="10" aria-label="EV load in watts"><em>W</em></span></div>
+      <div class="slide"><label for="s-soc">Battery SoC</label><input type="range" id="s-soc" min="0" max="100" step="1"><span class="inp"><input type="number" id="n-soc" min="0" max="100" step="1" aria-label="Battery state of charge"><em>%</em></span></div>
+      <div class="slide"><label for="n-grid_v">Grid voltage <small>all three phases</small></label><span></span><span class="inp"><input type="number" id="n-grid_v" min="0" step="0.1"><em>V</em></span></div>
+      <div id="set-coupling"></div>
+    </section>
+
+    <section class="card">
+      <h2>Battery settings</h2>
+      <div class="row"><span class="lbl">Inverter clock</span><b id="clock-now" class="mono"></b>
+        <input type="text" class="hhmm" id="clock-in" placeholder="HH:MM" maxlength="5" inputmode="numeric" aria-label="Set the inverter clock, 24-hour HH:MM">
+        <button class="btn small" id="clock-set">Set</button>
+        <button class="btn small" id="clock-sys" title="Follow the system time again">System time</button></div>
+      <div class="scroll-x"><table class="slots">
+        <thead><tr><th>Slot · reg</th><th>On</th><th>First</th><th>Start</th><th>End</th><th></th></tr></thead>
+        <tbody id="slot-body"></tbody>
+      </table></div>
+      <div class="row"><label for="b-pct">Charge power</label><span class="inp"><input type="number" id="b-pct" min="0" max="100" step="1"><em>%</em></span><span class="hint" style="margin:0">reg 3047</span></div>
+      <div class="row"><label for="b-stop">Stop SoC</label><span class="inp"><input type="number" id="b-stop" min="0" max="100" step="1"><em>%</em></span><span class="hint" style="margin:0">reg 3048</span></div>
+      <div class="row"><label for="b-ac">Grid charge</label><input type="checkbox" id="b-ac"><span class="hint" style="margin:0">AC charge enable, reg 3049</span></div>
+      <p class="hint">Changes here apply at once, like a change in the ShinePhone app. A slot runs when it is on and the
+        inverter clock is inside it.</p>
+    </section>
+
+    <section class="card">
+      <h2>Faults</h2>
+      <div class="row"><label for="f-status">Inverter status</label><select id="f-status"></select></div>
+      <div class="row"><label for="f-fault">Fault code</label><input type="number" id="f-fault" min="0" max="65535" step="1"></div>
+      <div class="row"><label for="f-warning">Warning code</label><input type="number" id="f-warning" min="0" max="65535" step="1"></div>
+      <div id="set-fault"></div>
+    </section>
+
+    <details class="card" open>
+      <summary>Serial link</summary>
+      <form class="form" id="link-form">
+        <label class="wide">Port <input type="text" name="port" list="ports" spellcheck="false" autocomplete="off"></label>
+        <datalist id="ports"><option value="/dev/serial0"><option value="/dev/ttyAMA0"><option value="/dev/ttyS0"><option value="/dev/ttyUSB0"><option value="/dev/ttyUSB1"><option value="pty"></datalist>
+        <label>Baud rate <select name="baud"></select></label>
+        <label>Parity <select name="parity"><option value="N">None</option><option value="E">Even</option><option value="O">Odd</option></select></label>
+        <label>Stop bits <select name="stopbits"><option>1</option><option>2</option></select></label>
+        <label>Slave address <input type="number" name="unit" min="1" max="247" step="1"></label>
+        <label class="wide">Direction control <select name="de">
+          <option value="none">Automatic (USB adapter, auto-direction board)</option>
+          <option value="gpio">A GPIO line drives DE and /RE</option>
+          <option value="rts">The RTS line drives DE</option></select></label>
+        <label>GPIO line <input type="number" name="de_gpio" min="0" max="255" step="1"></label>
+        <label>Reply after <span class="inp"><input type="number" name="turnaround_ms" min="0" max="5000" step="1"><em>ms</em></span></label>
+        <label class="check"><input type="checkbox" name="de_active_low"> DE is active low</label>
+        <label class="check"><input type="checkbox" name="echo"> Transceiver echoes what it sends</label>
+        <label class="wide" id="pty-row">Virtual port appears at <input type="text" name="pty_link" spellcheck="false"></label>
+        <div class="wide"><button class="btn primary small" type="submit">Apply and reopen</button>
+          <button class="btn small" type="button" id="link-revert">Revert</button></div>
+      </form>
+      <div class="linkstate" id="link-state"></div>
+      <p class="hint">On the pins: GPIO14 (pin 8) to the transceiver's DI, GPIO15 (pin 10) to RO, plus 3V3 and GND.
+        Then A to A and B to B on the adapter the controller reads. <span class="mono">pty</span> needs no hardware.</p>
+    </details>
+
+    <details class="card">
+      <summary>Behaviour</summary>
+      <h3>Battery and plant</h3><div id="set-plant"></div>
+      <h3>Inverter</h3><div id="set-inverter"></div>
+      <p style="margin:12px 0 0"><button class="btn small" id="btn-defaults">Restore default behaviour</button></p>
+    </details>
+  </div>
+
+  <div class="col">
+    <section class="card">
+      <div class="card-head"><h2>Last 10 minutes</h2></div>
+      <div class="legend">
+        <span><i class="key k1"></i>PV <b id="lg-pv">–</b></span>
+        <span><i class="key k2"></i>Load <b id="lg-load">–</b></span>
+        <span><i class="key k3"></i>Grid <b id="lg-grid">–</b></span>
+        <span><i class="key k4"></i>Battery <b id="lg-bat">–</b></span>
+      </div>
+      <div id="chart"><svg tabindex="0" role="img" aria-label="PV, load, grid and battery power over the last ten minutes"></svg><div id="tip" hidden></div></div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>Registers</h2>
+        <span class="hint" style="margin:0"><i class="swatch" style="background:var(--read-wash)"></i>read by the master
+          &nbsp; <i class="swatch" style="background:var(--write-wash)"></i>written by the master</span>
+      </div>
+      <div class="scroll-x">
+        <table class="regs">
+          <thead><tr><th>Addr</th><th>Register</th><th>Value</th><th>Raw (hex)</th><th>Reads</th><th>Writes</th></tr></thead>
+          <tbody id="reg-body"></tbody>
+        </table>
+      </div>
+      <form class="rawform" id="rawform">
+        <span>Any other address</span>
+        <select id="raw-kind" aria-label="Register table"><option value="i">input</option><option value="h">holding</option></select>
+        <input type="number" id="raw-addr" min="0" max="65535" step="1" placeholder="addr" aria-label="Address">
+        <input type="number" id="raw-value" min="0" max="65535" step="1" placeholder="value" aria-label="Raw value">
+        <button class="btn small">Set</button>
+        <span id="raw-list"></span>
+      </form>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>Traffic</h2>
+        <button class="chip" data-kind="read" aria-pressed="true">Reads</button>
+        <button class="chip" data-kind="write" aria-pressed="true">Writes</button>
+        <button class="chip" data-kind="error" aria-pressed="true">Errors</button>
+        <button class="chip" data-kind="event" aria-pressed="true">Events</button>
+        <span class="spacer"></span>
+        <label class="check"><input type="checkbox" id="chk-hex"> Frames in hex</label>
+        <button class="btn small" id="btn-pause">Pause</button>
+        <button class="btn small" id="btn-clear">Clear</button>
+      </div>
+      <div class="log mono" id="log"></div>
+    </section>
+  </div>
+</main>
+<div id="toast" hidden role="status"></div>
+
+<script>
+'use strict';
+const $ = (sel, root = document) => root.querySelector(sel);
+
+function h(tag, props, ...children) {
+  const node = document.createElement(tag);
+  for (const [key, value] of Object.entries(props || {})) {
+    if (key === 'class') node.className = value;
+    else if (key === 'text') node.textContent = value;
+    else if (key.startsWith('on')) node.addEventListener(key.slice(2), value);
+    else if (key in node) node[key] = value;
+    else node.setAttribute(key, value);
+  }
+  for (const child of children) if (child != null) node.append(child);
+  return node;
+}
+
+const pad = (n, width = 2) => String(n).padStart(width, '0');
+function clock(t, ms) {
+  const d = new Date(t * 1000);
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}` + (ms ? '.' + pad(d.getMilliseconds(), 3) : '');
+}
+function age(seconds) {
+  if (seconds == null) return '';
+  if (seconds < 1.5) return 'now';
+  if (seconds < 90) return `${Math.round(seconds)} s ago`;
+  if (seconds < 5400) return `${Math.round(seconds / 60)} min ago`;
+  return `${Math.round(seconds / 3600)} h ago`;
+}
+const kw = watts => (watts / 1000).toFixed(2);
+
+let toastTimer = null;
+function toast(message) {
+  const node = $('#toast');
+  node.textContent = message;
+  node.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { node.hidden = true; }, 5000);
+}
+
+async function api(path, body) {
+  let response, data;
+  try {
+    response = await fetch(path, body === undefined ? {} : {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    data = await response.json();
+  } catch (err) {
+    toast('The simulator did not answer.');
+    throw err;
+  }
+  if (!response.ok) {
+    toast(data.error || `Request failed (${response.status})`);
+    throw new Error(data.error || response.statusText);
+  }
+  return data;
+}
+// POST, then show the returned snapshot at once
+async function post(path, body) {
+  try { render(await api(path, body)); return true; } catch (err) { if (snap) render(snap); return false; }
+}
+
+// Write a server value into a control unless the user is editing it
+function sync(input, value) {
+  if (document.activeElement === input || input.dataset.busy) return;
+  if (input.type === 'checkbox') { if (input.checked !== !!value) input.checked = !!value; return; }
+  const text = String(value);
+  if (input.tagName === 'SELECT' && ![...input.options].some(o => o.value === text)) {
+    input.append(new Option(`${text} · undocumented`, text));
+  }
+  if (input.value !== text) input.value = text;
+}
+
+let meta = null, snap = null, bootId = null, logGen = null, linkGen = null, rendered = false;
+const regRows = new Map();
+const regMeta = new Map();
+const settingInputs = new Map();
+const slotRows = [];
+
+// ── Build the static parts from /api/meta ───────────────────────────────────
+function buildRegisters() {
+  const body = $('#reg-body');
+  let group = null;
+  for (const r of meta.registers) {
+    regMeta.set(r.key, r);
+    const title = r.kind === 'holding' ? 'Holding registers — read FC03, write FC06 / FC16'
+      : r.addr < 3000 ? 'Input registers 0–124 — FC04, read as one batch' : 'Input registers, 3000 bank — FC04';
+    if (title !== group) {
+      group = title;
+      body.append(h('tr', {class: 'group'}, h('td', {colSpan: 6, text: title})));
+    }
+    let input = null, shown;
+    if (r.dtype.startsWith('tou')) {
+      shown = h('span', {title: 'Edit the slot under Battery settings'});
+    } else {
+      if (r.enum) {
+        input = h('select');
+        for (const [code, label] of r.enum) input.append(new Option(`${code} · ${label}`, code));
+      } else {
+        input = h('input', {type: 'number', min: '0', step: r.decimals ? (1 / 10 ** r.decimals).toFixed(r.decimals) : '1'});
+      }
+      input.setAttribute('aria-label', r.label);
+      input.title = r.role === 'derived' ? 'Simulated. Setting a value pins it until you release it.'
+        : r.role === 'rw' ? 'Holding register. Setting it here applies at once.' : 'Input of the simulation.';
+      input.addEventListener('change', () => {
+        const value = Number(input.value);
+        input.blur();
+        post('/api/register', {rid: r.rid, value});
+      });
+      input.addEventListener('keydown', ev => { if (ev.key === 'Escape') { input.blur(); if (snap) render(snap); } });
+      shown = h('span', {class: 'inp'}, input, r.unit ? h('em', {text: r.unit}) : null);
+    }
+    const pin = h('button', {class: 'pin', hidden: true, type: 'button', text: 'pinned ✕',
+      title: 'Release: back to the simulated value', onclick: () => post('/api/release', {rid: r.rid})});
+    const raw = h('td', {class: 'raw mono'}), reads = h('td', {class: 'act'}), writes = h('td', {class: 'act'});
+    const tr = h('tr', null,
+      h('td', {class: 'addr', text: r.addr}),
+      h('td', {class: 'name'}, h('span', {text: r.label}), h('span', {class: 'tag', text: r.used_by}),
+        r.note ? h('small', {text: r.note}) : null),
+      h('td', {class: 'val'}, shown, pin),
+      raw, reads, writes);
+    body.append(tr);
+    regRows.set(r.rid, {r, tr, input, text: input ? null : shown, pin, raw, reads, writes, readSeen: 0, writeSeen: 0});
+  }
+}
+
+function buildSettings() {
+  for (const m of meta.settings) {
+    let input;
+    if (m.type === 'bool') input = h('input', {type: 'checkbox'});
+    else if (m.type === 'select') {
+      input = h('select');
+      for (const [value, label] of m.options) input.append(new Option(label, value));
+    } else if (m.type === 'text') input = h('input', {type: 'text', spellcheck: false});
+    else input = h('input', {type: 'number', min: m.min, max: m.max, step: 'any'});
+    input.addEventListener('change', () => {
+      const value = m.type === 'bool' ? input.checked : m.type === 'number' ? Number(input.value) : input.value;
+      input.blur();
+      post('/api/settings', {[m.key]: value});
+    });
+    const field = m.type === 'number' ? h('span', {class: 'inp'}, input, h('em', {text: m.unit || ''})) : input;
+    $('#set-' + m.group).append(h('label', {class: 'set'},
+      h('span', {class: 'set-l'}, h('span', {text: m.label}), h('small', {text: m.help})), field));
+    settingInputs.set(m.key, input);
+  }
+  $('#btn-defaults').addEventListener('click', () => {
+    post('/api/settings', Object.fromEntries(meta.settings.map(m => [m.key, m.default])));
+  });
+}
+
+const PLANT_KEYS = ['pv1_w', 'pv2_w', 'house_w', 'ev_w', 'soc'];
+function buildPlant() {
+  for (const preset of meta.presets) {
+    $('#presets').append(h('button', {class: 'btn small', type: 'button', text: preset.label,
+      title: `MPPT1 ${preset.plant.pv1_w} W, MPPT2 ${preset.plant.pv2_w} W`, onclick: () => post('/api/plant', preset.plant)}));
+  }
+  for (const key of PLANT_KEYS) {
+    const range = $('#s-' + key), number = $('#n-' + key);
+    let timer = null, idle = null;
+    range.addEventListener('input', () => {
+      number.value = range.value;
+      range.dataset.busy = number.dataset.busy = '1';     // the stream must not fight the drag
+      clearTimeout(idle);
+      idle = setTimeout(() => { delete range.dataset.busy; delete number.dataset.busy; }, 600);
+      clearTimeout(timer);
+      timer = setTimeout(() => post('/api/plant', {[key]: Number(range.value)}), 80);
+    });
+    number.addEventListener('change', () => { const value = Number(number.value); number.blur(); post('/api/plant', {[key]: value}); });
+  }
+  const volts = $('#n-grid_v');
+  volts.addEventListener('change', () => { const value = Number(volts.value); volts.blur(); post('/api/plant', {grid_v: value}); });
+}
+
+function buildBattery() {
+  const body = $('#slot-body');
+  for (let n = 1; n <= 6; n++) {
+    const on = h('input', {type: 'checkbox'});
+    const prio = h('select');
+    for (const [code, label] of meta.priorities) prio.append(new Option(label.replace(' first', ''), code));
+    const time = () => h('input', {type: 'text', class: 'hhmm', maxLength: 5, placeholder: 'HH:MM', inputMode: 'numeric'});
+    const start = time(), end = time();
+    const state = h('td', {class: 'st'});
+    const send = ev => {
+      ev.target.blur();
+      post('/api/slot', {n, enabled: on.checked, priority: Number(prio.value), start: start.value, end: end.value});
+    };
+    for (const control of [on, prio, start, end]) {
+      control.addEventListener('change', send);
+      control.setAttribute('aria-label', `Slot ${n}`);
+    }
+    const label = h('td');
+    const tr = h('tr', null, label, h('td', null, on), h('td', null, prio), h('td', null, start), h('td', null, end), state);
+    body.append(tr);
+    slotRows.push({tr, label, on, prio, start, end, state});
+  }
+  const byKey = {charge: ['#b-pct', 'h3047'], stop: ['#b-stop', 'h3048']};
+  for (const [id, rid] of Object.values(byKey)) {
+    const input = $(id);
+    input.addEventListener('change', () => { const value = Number(input.value); input.blur(); post('/api/register', {rid, value}); });
+  }
+  $('#b-ac').addEventListener('change', ev => post('/api/register', {rid: 'h3049', value: ev.target.checked ? 1 : 0}));
+  $('#clock-set').addEventListener('click', () => {
+    if (!$('#clock-in').value.trim()) { toast('Enter a time as HH:MM first.'); return; }
+    post('/api/clock', {time: $('#clock-in').value});
+  });
+  $('#clock-sys').addEventListener('click', () => { $('#clock-in').value = ''; post('/api/clock', {}); });
+}
+
+function buildFaults() {
+  const status = $('#f-status');
+  for (const [code, label] of meta.status_codes) status.append(new Option(`${code} · ${label}`, code));
+  for (const [id, rid] of [['#f-status', 'i0'], ['#f-fault', 'i105'], ['#f-warning', 'i106']]) {
+    const input = $(id);
+    input.addEventListener('change', () => { const value = Number(input.value); input.blur(); post('/api/register', {rid, value}); });
+  }
+  $('#btn-reset').addEventListener('click', () => post('/api/reset', {}));
+  $('#rawform').addEventListener('submit', ev => {
+    ev.preventDefault();
+    const addr = $('#raw-addr').value, value = $('#raw-value').value;
+    if (addr === '' || value === '') { toast('Enter an address and a value.'); return; }
+    post('/api/register', {rid: $('#raw-kind').value + Number(addr), raw: [Number(value)]});
+  });
+}
+
+const linkForm = $('#link-form');
+function fillLink(link) {
+  const f = linkForm.elements;
+  for (const key of ['port', 'baud', 'parity', 'stopbits', 'unit', 'de', 'de_gpio', 'turnaround_ms', 'pty_link']) f[key].value = link[key];
+  f.de_active_low.checked = !link.de_active_high;
+  f.echo.checked = !!link.echo;
+  showLinkFields();
+}
+function showLinkFields() {
+  const f = linkForm.elements;
+  $('#pty-row').hidden = f.port.value.trim() !== 'pty';
+  const gpio = f.de.value === 'gpio', none = f.de.value === 'none';
+  f.de_gpio.closest('label').hidden = !gpio;
+  f.de_active_low.closest('label').hidden = none;
+}
+function buildLink() {
+  for (const rate of meta.baud_rates) linkForm.elements.baud.append(new Option(rate, rate));
+  linkForm.addEventListener('input', showLinkFields);
+  linkForm.addEventListener('submit', async ev => {
+    ev.preventDefault();
+    const f = linkForm.elements;
+    await post('/api/link', {
+      port: f.port.value.trim(), baud: Number(f.baud.value), parity: f.parity.value, stopbits: Number(f.stopbits.value),
+      unit: Number(f.unit.value), de: f.de.value, de_gpio: Number(f.de_gpio.value),
+      de_active_high: !f.de_active_low.checked, echo: f.echo.checked,
+      turnaround_ms: Number(f.turnaround_ms.value), pty_link: f.pty_link.value.trim()});
+    if (snap) fillLink(snap.link);
+  });
+  $('#link-revert').addEventListener('click', () => { if (snap) fillLink(snap.link); });
+}
+
+// ── Live rendering ──────────────────────────────────────────────────────────
+function tone(node, value) { node.dataset.tone = value; }
+function setPill(id, toneName, text) {
+  const pill = $(id);
+  tone(pill, toneName);
+  pill.lastElementChild.textContent = text;
+  pill.title = text;
+}
+
+function renderHeader(s) {
+  const st = s.link_status;
+  setPill('#pill-link', st.state === 'open' ? 'good' : st.state === 'error' ? 'bad' : 'neutral',
+    st.state === 'open' ? `Serial link open · ${st.detail}` : `Serial link ${st.state} · ${st.detail}`);
+  const c = s.counters;
+  const problems = [];
+  if (c.crc_errors) problems.push(`${c.crc_errors} bad frame${c.crc_errors > 1 ? 's' : ''}`);
+  if (c.other_unit) problems.push(`${c.other_unit} for another address`);
+  if (c.dropped) problems.push(`${c.dropped} dropped`);
+  if (s.last_request_age_s == null) setPill('#pill-activity', problems.length ? 'warn' : 'neutral', ['No request yet', ...problems].join(' · '));
+  else setPill('#pill-activity', s.last_request_age_s < 30 ? 'good' : 'neutral',
+    [`${c.requests} request${c.requests > 1 ? 's' : ''} · last ${age(s.last_request_age_s)}`, ...problems].join(' · '));
+  const state = $('#link-state');
+  tone(state, st.state === 'error' ? 'bad' : 'neutral');
+  state.textContent = (st.state === 'open' ? 'Open: ' : st.state === 'error' ? 'Not open: ' : '') + st.detail +
+    (st.state === 'error' ? '. Trying again every 2 s.' : '');
+}
+
+const STATUS_TONE = {0: 'warn', 1: 'good', 3: 'bad'};
+const STATUS_ICON = {0: '…', 1: '☀', 3: '✕'};
+const MODE_TEXT = {0: 'Load first', 1: 'Battery first', 2: 'Grid first'};
+
+function renderInverter(s) {
+  const reg = Object.fromEntries(s.registers.map(x => [x.rid, x]));
+  const value = key => reg[regMeta.get(key).rid].value;
+  const f = s.flows;
+  const status = value('status');
+  const label = (meta.status_codes.find(x => x[0] === status) || [0, 'Undocumented status'])[1];
+  tone($('#wb'), STATUS_TONE[status] || 'neutral');
+  $('#wb-icon').textContent = STATUS_ICON[status] || '●';
+  $('#wb-name').textContent = label;
+  const fault = value('fault_code'), warning = value('warning_code');
+  $('#wb-sub').textContent = `Status ${status} · ` + (fault ? `fault ${fault}` : 'no fault') + (warning ? ` · warning ${warning}` : '');
+
+  const pv1 = value('pv1_w'), pv2 = value('pv2_w');
+  const imp = value('grid_import_w'), exp = value('grid_export_w');
+  const dis = value('bat_discharge_w'), chg = value('bat_charge_w');
+  $('#t-pv').textContent = kw(pv1 + pv2);
+  $('#t-pv-s').textContent = `MPPT1 ${kw(pv1)} · MPPT2 ${kw(pv2)}`;
+  $('#t-load').textContent = kw(f.load);
+  $('#t-load-s').textContent = `house ${kw(f.house)} · EV ${kw(f.ev)}`;
+  $('#t-bat').textContent = kw(Math.max(dis, chg));
+  $('#t-bat-s').textContent = `${value('soc')} % · ` + (chg > 0 ? 'charging' : dis > 0 ? 'discharging' : 'idle');
+  $('#t-grid').textContent = kw(Math.max(imp, exp));
+  $('#t-grid-s').textContent = exp > 0 ? 'exporting' : imp > 0 ? 'importing' : 'balanced';
+
+  const slot = f.slot ? s.slots[f.slot - 1] : null;
+  $('#f-mode').textContent = MODE_TEXT[f.mode] + (slot ? ` · slot ${slot.n}, ${slot.start}–${slot.end}` : ' · no slot active');
+  const armed = s.slots.find(x => x.enabled && x.priority === 1 && !x.active && !x.crosses_midnight);
+  $('#f-gridcharge').textContent = f.grid_charge ? `On · up to ${kw(f.charge_limit_w)} kW into the battery`
+    : s.ac_charge && armed ? `Armed · slot ${armed.n} opens at ${armed.start}`
+    : s.ac_charge ? 'Enabled, but no battery-first slot is on' : 'Off';
+  $('#f-limit').textContent = `${s.charge_power_pct} % = ${kw(f.charge_limit_w)} kW · stops at ${s.stop_soc} % SoC`;
+  const c = s.controller;
+  $('#f-surplus').textContent = `${c.surplus_w} W` + (c.reserve_w
+    ? ` · ${c.available_w} W after the ${c.reserve_w / 1000} kW battery reserve` : ' · no battery reserve at this SoC');
+  $('#f-surplus').title = 'What the controller computes from these registers with its default settings: ' +
+    'grid export (without the EV) minus battery discharge plus battery charge, then 3 kW held back below 90 % SoC.';
+  $('#f-energy').textContent = `today ${value('e_today').toFixed(1)} kWh · total ${value('e_total').toFixed(1)} kWh`;
+
+  const notices = [];
+  const note = (cls, text, button) => notices.push(h('div', {class: 'notice ' + cls}, h('span', {text}), button || null));
+  if (s.pending.length) {
+    const wait = Math.max(...s.pending.map(p => p.in_ms));
+    note('info', `${s.pending.length} write${s.pending.length > 1 ? 's' : ''} acknowledged, not applied yet (${wait} ms).`);
+  }
+  for (const x of s.slots) {
+    if (x.enabled && x.crosses_midnight) note('', `⚠ Slot ${x.n} ends before it starts (${x.start}–${x.end}). A slot cannot cross midnight, so it never runs.`);
+  }
+  if (s.settings.fault_mode !== 'none') note('', '⚠ Modbus link fault is switched on (see Faults).');
+  if (s.settings.drop_pct > 0) note('', `⚠ ${s.settings.drop_pct} % of the requests get no reply (see Faults).`);
+  if (s.settings.ev_follow && s.ev_follow.ok === false) note('bad', `✕ em2go-sim is not reachable: ${s.ev_follow.error}. EV load taken as 0.`);
+  if (s.clock_offset_s) {
+    const m = Math.round(Math.abs(s.clock_offset_s) / 60);
+    note('info', `The inverter clock is ${Math.floor(m / 60)} h ${m % 60} min ${s.clock_offset_s > 0 ? 'ahead of' : 'behind'} the system time. The controller still uses the system time.`);
+  }
+  const pinned = s.registers.filter(x => x.pinned);
+  if (pinned.length) {
+    note('', `Pinned, not simulated: ${pinned.map(x => regRows.get(x.rid).r.label).join(', ')}.`,
+      h('button', {class: 'btn small', text: 'Release all', onclick: () => post('/api/release', {})}));
+  }
+  $('#notices').replaceChildren(...notices);
+
+  $('#lg-pv').textContent = `${kw(pv1 + pv2)} kW`;
+  $('#lg-load').textContent = `${kw(f.load)} kW`;
+  $('#lg-grid').textContent = exp > 0 ? `${kw(exp)} kW export` : `${kw(imp)} kW import`;
+  $('#lg-bat').textContent = chg > 0 ? `${kw(chg)} kW charge` : `${kw(dis)} kW discharge`;
+  return reg;
+}
+
+function renderControls(s, reg) {
+  for (const key of ['pv1_w', 'pv2_w', 'house_w']) { sync($('#s-' + key), s.plant[key]); sync($('#n-' + key), Math.round(s.plant[key])); }
+  const following = s.settings.ev_follow;
+  const ev = following ? s.flows.ev : s.plant.ev_w;
+  $('#s-ev_w').disabled = $('#n-ev_w').disabled = following;
+  sync($('#s-ev_w'), ev); sync($('#n-ev_w'), Math.round(ev));
+  $('#ev-note').textContent = !following ? 'set by hand' : s.ev_follow.ok ? 'from em2go-sim' : s.ev_follow.ok === false ? 'em2go-sim unreachable' : 'waiting for em2go-sim';
+  sync($('#s-soc'), Math.round(s.soc)); sync($('#n-soc'), s.soc.toFixed(1));
+  sync($('#n-grid_v'), s.grid_v.toFixed(1));
+  $('#clock-now').textContent = s.inverter_time.slice(11);
+  for (const x of s.slots) {
+    const row = slotRows[x.n - 1];
+    row.label.textContent = `${x.n} · ${x.reg}`;
+    sync(row.on, x.enabled); sync(row.prio, x.priority); sync(row.start, x.start); sync(row.end, x.end);
+    row.tr.classList.toggle('active', x.active);
+    row.state.textContent = x.active ? 'active' : x.crosses_midnight ? 'invalid' : '';
+  }
+  sync($('#b-pct'), s.charge_power_pct); sync($('#b-stop'), s.stop_soc); sync($('#b-ac'), s.ac_charge);
+  sync($('#f-status'), reg.i0.value); sync($('#f-fault'), reg.i105.value); sync($('#f-warning'), reg.i106.value);
+  for (const [key, input] of settingInputs) sync(input, s.settings[key]);
+  if (linkGen !== s.link_gen) { linkGen = s.link_gen; fillLink(s.link); }
+}
+
+function flash(node, token) {
+  const color = getComputedStyle(document.documentElement).getPropertyValue(token).trim();
+  node.animate([{backgroundColor: color}, {backgroundColor: color, offset: .3}, {backgroundColor: 'transparent'}],
+    {duration: 1500, easing: 'ease-out'});
+}
+
+function renderRegisters(s, first) {
+  for (const reg of s.registers) {
+    const row = regRows.get(reg.rid);
+    if (!row) continue;
+    const r = row.r;
+    if (row.input) sync(row.input, r.enum ? reg.value : Number(reg.value).toFixed(r.decimals));
+    else row.text.textContent = reg.text;
+    row.pin.hidden = !reg.pinned;
+    row.raw.textContent = reg.words.map(w => w.toString(16).toUpperCase().padStart(4, '0')).join(' ');
+    row.reads.textContent = reg.r ? `${reg.r} · ${age(s.t - reg.tr)}` : '–';
+    row.writes.textContent = r.kind === 'holding' ? (reg.w ? `${reg.w} · ${age(s.t - reg.tw)}` : '–') : '';
+    if (!first) {
+      if (reg.tw && reg.tw !== row.writeSeen) flash(row.tr, '--write-wash');
+      else if (reg.tr && reg.tr !== row.readSeen) flash(row.tr, '--read-wash');
+    }
+    row.readSeen = reg.tr; row.writeSeen = reg.tw;
+  }
+  const extras = s.extras.map(([kind, addr, word]) => `${kind} [${addr}] = ${word}`);
+  if (s.baseline.name) extras.push(`scan loaded: ${s.baseline.input} input and ${s.baseline.holding} holding registers`);
+  $('#raw-list').textContent = extras.join(', ');
+}
+
+function render(s) {
+  if (bootId && s.boot_id !== bootId) { location.reload(); return; }   // the simulator was restarted
+  bootId = s.boot_id;
+  if (logGen !== null && s.log_gen !== logGen) { $('#log').replaceChildren(); held.length = 0; showPause(); }
+  logGen = s.log_gen;
+  snap = s;
+  renderHeader(s);
+  renderControls(s, renderInverter(s));
+  renderRegisters(s, !rendered);
+  rendered = true;
+  if (s.sample) pushSample(s.sample);
+}
+
+// ── Traffic log ─────────────────────────────────────────────────────────────
+const TAGS = {read: 'READ', write: 'WRITE', error: 'ERROR', event: 'EVENT'};
+const MAX_ROWS = 600;
+const held = [];
+let paused = false;
+
+function entryRow(e) {
+  const body = h('span', {class: 'txt'});
+  if (e.addr != null && e.kind !== 'error') body.append(h('span', {class: 'what', text: `${e.table} ${e.addr} ×${e.count}`}));
+  body.append(e.text);
+  const bits = [];
+  if (e.unit != null) bits.push(`address ${e.unit}`);
+  if (e.ms != null) bits.push(`${e.ms} ms`);
+  const row = h('div', {class: `log-row k-${e.kind} lvl-${e.level}`},
+    h('time', {text: clock(e.t, true)}), h('span', {class: 'lt', text: TAGS[e.kind] || e.kind}),
+    body, h('span', {class: 'meta', text: bits.join(' · ')}));
+  if (e.req) row.append(h('div', {class: 'hex', text: `→ ${e.req}\n← ${e.resp || '(no reply)'}`}));
+  return row;
+}
+
+function addEntries(entries) {
+  if (paused) { held.push(...entries); if (held.length > 2000) held.splice(0, held.length - 2000); showPause(); return; }
+  const log = $('#log');
+  const fragment = document.createDocumentFragment();
+  for (const e of entries) fragment.prepend(entryRow(e));    // newest on top
+  log.prepend(fragment);
+  while (log.children.length > MAX_ROWS) log.lastChild.remove();
+}
+function showPause() { $('#btn-pause').textContent = paused ? `Resume${held.length ? ` (${held.length})` : ''}` : 'Pause'; }
+
+function buildTraffic() {
+  const log = $('#log');
+  for (const chip of document.querySelectorAll('.chip')) {
+    chip.addEventListener('click', () => {
+      const on = chip.getAttribute('aria-pressed') !== 'true';
+      chip.setAttribute('aria-pressed', String(on));
+      log.classList.toggle('hide-' + chip.dataset.kind, !on);
+    });
+  }
+  $('#chk-hex').addEventListener('change', ev => log.classList.toggle('show-hex', ev.target.checked));
+  $('#btn-pause').addEventListener('click', () => {
+    paused = !paused;
+    if (!paused) { const backlog = held.splice(0); addEntries(backlog); }
+    showPause();
+  });
+  $('#btn-clear').addEventListener('click', () => api('/api/log/clear', {}).catch(() => {}));
+}
+
+// ── Chart: PV and load; grid and battery (signed). One unit, kW ─────────────
+const SVG = 'http://www.w3.org/2000/svg';
+const WINDOW_S = 600;
+const chartBox = $('#chart'), svg = $('#chart svg'), tip = $('#tip');
+let hist = [], chartQueued = false, hoverT = null, geo = null;
+
+function sv(tag, attrs, text) {
+  const node = document.createElementNS(SVG, tag);
+  for (const key in attrs) node.setAttribute(key, attrs[key]);
+  if (text != null) node.textContent = text;
+  return node;
+}
+function pushSample(sample) {
+  if (hist.length && sample.t <= hist[hist.length - 1].t) return;
+  hist.push(sample);
+  while (hist.length && hist[0].t < sample.t - 900) hist.shift();
+  queueChart();
+}
+function queueChart() {
+  if (chartQueued) return;
+  chartQueued = true;
+  requestAnimationFrame(() => { chartQueued = false; drawChart(); });
+}
+function scaleFor(maxValue, floor) {
+  const max = Math.max(maxValue, floor);
+  for (const step of [1, 2, 4, 5, 8, 10, 16, 20, 25, 40, 50, 100]) {
+    if (max / step <= 4.0001) return {step, top: Math.ceil(max / step - 1e-9) * step};
+  }
+  return {step: max / 4, top: max};
+}
+// Unbroken runs of [t, value]: a gap in time breaks the line
+function runs(points, get) {
+  const out = [];
+  let run = null, last = null;
+  for (const p of points) {
+    if (last !== null && p.t - last > 5) run = null;
+    if (!run) { run = []; out.push(run); }
+    run.push([p.t, get(p)]);
+    last = p.t;
+  }
+  return out;
+}
+
+function drawChart() {
+  const W = chartBox.clientWidth;
+  if (W < 120) return;
+  const L = 34, R = 10, H = 276;
+  const top = {y: 20, h: 92}, bottom = {y: 152, h: 100};
+  const t1 = hist.length ? hist[hist.length - 1].t : Date.now() / 1000, t0 = t1 - WINDOW_S;
+  const x = t => L + (t - t0) / WINDOW_S * (W - L - R);
+  const points = hist.filter(p => p.t >= t0);
+  geo = {W, L, R, t0, points};
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.setAttribute('height', H);
+  const nodes = [];
+
+  const up = scaleFor(Math.max(0, ...points.map(p => Math.max(p.pv, p.load) / 1000)), 4);
+  const both = scaleFor(Math.max(0, ...points.map(p => Math.max(Math.abs(p.grid), Math.abs(p.bat)) / 1000)), 2);
+  if (both.top / both.step > 2) {                      // the signed panel shows −top … +top
+    both.step *= 2;
+    both.top = Math.ceil(both.top / both.step - 1e-9) * both.step;
+  }
+  const frame = (panel, lo, hi, step, title) => {
+    const y = v => panel.y + panel.h - (v - lo) / (hi - lo) * panel.h;
+    for (let v = lo; v <= hi + 1e-9; v += step) {
+      nodes.push(sv('line', {x1: L, x2: W - R, y1: y(v), y2: y(v), class: Math.abs(v) < 1e-9 ? 'axis' : 'grid'}));
+      nodes.push(sv('text', {x: L - 6, y: y(v) + 4, class: 'tick', 'text-anchor': 'end'}, String(v).replace('-', '−')));
+    }
+    nodes.push(sv('text', {x: L, y: panel.y - 8, class: 'ptitle'}, title));
+    return y;
+  };
+  const yTop = frame(top, 0, up.top, up.step, 'PV and load, kW');
+  const yBottom = frame(bottom, -both.top, both.top, both.step, 'Grid and battery, kW  (+ import, discharge · − export, charge)');
+  for (let t = Math.ceil(t0 / 120) * 120; t <= t1; t += 120) {
+    nodes.push(sv('text', {x: x(t), y: H - 6, class: 'tick', 'text-anchor': 'middle'}, clock(t).slice(0, 5)));
+  }
+  const line = (run, y) => run.map(([t, v], i) => `${i ? 'L' : 'M'}${x(t).toFixed(1)},${y(v).toFixed(1)}`).join('');
+  const series = [['s1', p => p.pv / 1000, yTop], ['s2', p => p.load / 1000, yTop],
+                  ['s3', p => p.grid / 1000, yBottom], ['s4', p => p.bat / 1000, yBottom]];
+  for (const [cls, get, y] of series) {
+    for (const run of runs(points, get)) nodes.push(sv('path', {class: 'ln ' + cls, d: line(run, y)}));
+  }
+
+  let hover = null;
+  if (hoverT !== null && points.length) {
+    hover = points.reduce((best, p) => Math.abs(p.t - hoverT) < Math.abs(best.t - hoverT) ? p : best);
+    if (Math.abs(hover.t - hoverT) > 15) hover = null;
+  }
+  if (hover) {
+    const hx = x(hover.t);
+    nodes.push(sv('line', {class: 'cross', x1: hx, x2: hx, y1: top.y, y2: bottom.y + bottom.h}));
+    for (const [cls, get, y] of series) nodes.push(sv('circle', {class: 'pt ' + cls, cx: hx, cy: y(get(hover)), r: 4}));
+    const row = (key, value, label) => h('div', null, h('i', {class: 'key ' + key}), h('b', {text: value}), h('span', {text: label}));
+    tip.replaceChildren(h('div', {class: 'tip-t', text: clock(hover.t)}),
+      row('k1', `${kw(hover.pv)} kW`, 'PV'), row('k2', `${kw(hover.load)} kW`, 'Load'),
+      row('k3', `${kw(Math.abs(hover.grid))} kW`, hover.grid < 0 ? 'Grid export' : 'Grid import'),
+      row('k4', `${kw(Math.abs(hover.bat))} kW`, hover.bat < 0 ? 'Battery charge' : 'Battery discharge'));
+    tip.hidden = false;
+    const width = tip.offsetWidth;
+    tip.style.left = `${hx + 14 + width > W ? hx - 14 - width : hx + 14}px`;
+  } else {
+    tip.hidden = true;
+  }
+  svg.replaceChildren(...nodes);
+}
+
+function buildChart() {
+  const timeAt = clientX => geo.t0 + (clientX - svg.getBoundingClientRect().left - geo.L) / (geo.W - geo.L - geo.R) * WINDOW_S;
+  svg.addEventListener('pointermove', ev => { if (geo) { hoverT = timeAt(ev.clientX); queueChart(); } });
+  svg.addEventListener('pointerleave', () => { hoverT = null; queueChart(); });
+  svg.addEventListener('blur', () => { hoverT = null; queueChart(); });
+  svg.addEventListener('keydown', ev => {
+    if (!geo || !geo.points.length) return;
+    const lastT = geo.points[geo.points.length - 1].t;
+    if (ev.key === 'ArrowLeft') hoverT = (hoverT === null ? lastT : hoverT) - 5;
+    else if (ev.key === 'ArrowRight') hoverT = Math.min(lastT, (hoverT === null ? lastT : hoverT) + 5);
+    else if (ev.key === 'Escape') hoverT = null;
+    else return;
+    ev.preventDefault();
+    queueChart();
+  });
+  new ResizeObserver(queueChart).observe(chartBox);
+}
+
+// ── Start ───────────────────────────────────────────────────────────────────
+function setLive(up) { setPill('#pill-live', up ? 'good' : 'bad', up ? 'Live' : 'Simulator not reachable, retrying'); }
+
+async function start() {
+  meta = await api('/api/meta');
+  buildRegisters(); buildSettings(); buildPlant(); buildBattery(); buildFaults(); buildLink(); buildTraffic(); buildChart();
+  hist = await api('/api/history');
+  queueChart();
+  const stream = new EventSource('/api/events');
+  stream.addEventListener('state', ev => { setLive(true); render(JSON.parse(ev.data)); });
+  stream.addEventListener('log', ev => addEntries(JSON.parse(ev.data)));
+  stream.onerror = () => setLive(false);
+}
+start();
+</script>
+</body>
+</html>
