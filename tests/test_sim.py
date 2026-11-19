@@ -67,6 +67,15 @@ class ModelCase(unittest.TestCase):
         self.inv.modbus_write(3049, [1], fc=6)
         self.mono += 1.0
 
+    def night_hold(self) -> None:
+        """What NightChargeManager._apply(False) writes with the night hold on: grid charge off
+        first, then both slots enabled as battery first, then the daytime charge power."""
+        self.inv.modbus_write(3049, [0], fc=6)
+        self.inv.modbus_write(3038, [R.encode_tou_start(True, R.PRIO_BATTERY, 21, 1), R.encode_tou_end(23, 59)], fc=16)
+        self.inv.modbus_write(3040, [R.encode_tou_start(True, R.PRIO_BATTERY, 0, 0), R.encode_tou_end(6, 59)], fc=16)
+        self.inv.modbus_write(3047, [100], fc=6)
+        self.mono += 1.0
+
 
 class RegisterMapTest(unittest.TestCase):
     def test_everything_growatt_reader_reads_is_modelled(self) -> None:
@@ -79,8 +88,11 @@ class RegisterMapTest(unittest.TestCase):
         for start in (3038, 3040, 3042, 3044, 3050, 3052):
             self.assertEqual(R.WORD_OWNER[("holding", start)][0].dtype, "tou_start")
             self.assertEqual(R.WORD_OWNER[("holding", start + 1)][0].dtype, "tou_end")
-        for addr in (3047, 3048, 3049):
+        for addr in (3047, 3048, 3049, 3067):
             self.assertIn(("holding", addr), R.WORD_OWNER)
+        self.assertEqual(R.HOLDING_DEFAULTS[3067], 10)                 # the live inverter's normal value
+        for addr in (3171, 3000):                                      # SoC for the limit, status for the wake-up
+            self.assertIn(("input", addr), R.WORD_OWNER)
 
     def test_tou_words(self) -> None:
         # values seen on the live inverter
@@ -191,6 +203,107 @@ class TouTest(ModelCase):
         self.assertEqual(self.reg("grid_import_w"), 400.0)       # and the battery is not discharged
         self.inv.set_plant(pv2_w=3000)
         self.assertEqual(self.flows()["charge"], 3000.0)
+
+    def test_night_hold_keeps_the_battery_at_its_level_inside_the_window(self) -> None:
+        """The controller's night hold: slots enabled, grid charge off, no charge tonight."""
+        self.wall = at(20, 30)
+        self.night_hold()
+        f = self.flows()
+        self.assertEqual((f["mode"], f["discharge"], f["grid_net"]), (R.PRIO_LOAD, 400.0, 0))    # evening: as always
+        for hour, minute, slot in ((21, 1, 1), (23, 59, 1), (0, 0, 2), (3, 0, 2), (6, 59, 2)):
+            self.wall = at(hour, minute)
+            f = self.flows()
+            self.assertEqual((f["mode"], f["slot"], f["grid_charge"]), (R.PRIO_BATTERY, slot, False), (hour, minute))
+            self.assertEqual((f["charge"], f["discharge"]), (0.0, 0.0), (hour, minute))            # held
+            self.assertEqual(self.reg("grid_import_w"), 400.0)                                      # house on the grid
+            self.assertEqual((self.reg("bat_discharge_w"), self.reg("bat_charge_w")), (0.0, 0.0))
+        self.wall = at(3, 0)
+        self.inv.update_settings({"time_speed": 3600})
+        self.run_for(4)                                          # four simulated hours of holding
+        self.assertEqual(self.reg("soc"), 50)                    # the level did not move
+        self.inv.update_settings({"time_speed": 1})
+        self.wall = at(7, 0)                                     # window over: the battery takes the house back
+        f = self.flows()
+        self.assertEqual((f["mode"], f["discharge"], f["grid_net"]), (R.PRIO_LOAD, 400.0, 0))
+        # switching the charge on in the middle of a held night only takes grid charge and the rate
+        self.wall = at(2, 0)
+        self.inv.modbus_write(3047, [25], fc=6)
+        self.inv.modbus_write(3049, [1], fc=6)
+        self.mono += 1.0
+        self.assertEqual(self.reg("bat_charge_w"), 2400.0)
+
+    def test_discharge_stop_soc_stops_the_discharge_and_charges_below_it(self) -> None:
+        """Register 3067 as seen on the inverter on 2026-11-17."""
+        f = self.flows()                                         # noon clock, no slot, no sun in the model: night
+        self.assertEqual((f["discharge"], f["grid_net"]), (400.0, 0))
+        self.inv.modbus_write(3067, [50], fc=6)                  # the limit at the battery's level (SoC 50)
+        self.mono += 1.0
+        f = self.flows()
+        self.assertEqual((f["charge"], f["discharge"], f["grid_net"]), (0.0, 0.0, 400.0))
+        self.assertEqual((self.reg("bat_discharge_w"), self.reg("bat_charge_w")), (0.0, 0.0))
+        self.inv.set_register("h3067", value=51)                 # one point above: a trickle from the grid
+        f = self.flows()
+        self.assertTrue(f["reserve_charge"])
+        self.assertEqual((f["charge"], f["discharge"], f["grid_net"]), (35.0, 0.0, 435.0))
+        self.inv.set_register("h3067", value=52)                 # more than a point: the full rate
+        self.assertEqual(self.flows()["charge"], 1170.0)
+        self.inv.set_register("h3067", value=71)                 # far above: charges at 1.17 kW, grid charge off
+        self.assertEqual(self.inv.holding[3049], 0)
+        f = self.flows()
+        self.assertEqual((f["charge"], f["grid_net"], f["grid_charge"]), (1170.0, 1570.0, False))
+        self.assertEqual(self.reg("bat_charge_w"), 1170.0)
+        self.inv.set_register("h3047", value=5)                  # the charge power register still limits it
+        self.assertEqual(self.flows()["charge"], 480.0)
+        self.inv.set_register("h3047", value=100)
+        self.inv.set_register("h3067", value=52)
+        self.inv.tick()
+        self.inv.update_settings({"time_speed": 360})
+        self.run_for(10)                                         # one simulated hour at 1.17 kW: past 51 %
+        self.assertTrue(51.0 < self.inv.soc < 52.0, self.inv.soc)
+        self.assertEqual(self.flows()["charge"], 35.0)           # the last point goes slowly
+        self.run_for(80)                                         # eight more hours
+        self.assertAlmostEqual(self.inv.soc, 52.0, delta=0.11)   # it ends where the limit is (within one coarse step)
+        self.inv.update_settings({"time_speed": 1})
+        self.inv.set_plant(soc=52)
+        f = self.flows()
+        self.assertEqual((f["charge"], f["discharge"]), (0.0, 0.0))
+        self.inv.set_register("h3067", value=10)                 # limit back to normal: the battery takes the house
+        self.assertEqual(self.flows()["discharge"], 400.0)
+        with self.assertRaises(ModbusError):
+            self.inv.modbus_write(3067, [101], fc=6)
+
+    def test_inverter_self_use_drains_a_slot_only_hold_until_the_limit_is_raised(self) -> None:
+        """Measured 2026-11-17: slots alone left ~225 W on the battery, the limit took it to 0 W."""
+        self.inv.update_settings({"self_use_w": 225})
+        f = self.flows()                                         # an ordinary night: house and inverter on the battery
+        self.assertEqual((f["discharge"], f["grid_net"], f["pac"]), (625.0, 0, 400.0))
+        self.wall = at(22, 0)
+        self.night_hold()                                        # slots on, grid charge off
+        f = self.flows()
+        self.assertEqual((f["mode"], f["charge"], f["discharge"], f["grid_net"]), (R.PRIO_BATTERY, 0.0, 225.0, 400.0))
+        self.inv.tick()
+        self.inv.update_settings({"time_speed": 3600})
+        self.run_for(4)
+        self.assertAlmostEqual(self.inv.soc, 45.5, delta=0.1)    # 0.9 kWh gone in four hours
+        self.inv.update_settings({"time_speed": 1})
+        self.inv.modbus_write(3067, [45], fc=6)                  # what the controller writes: the level it reads
+        self.mono += 1.0
+        self.assertEqual(self.reg("soc"), 45)
+        f = self.flows()
+        self.assertEqual((f["discharge"], f["charge"]), (225.0, 0.0))       # down to the full point first ...
+        self.inv.tick()
+        self.inv.update_settings({"time_speed": 360})
+        self.run_for(40)                                         # four simulated hours
+        self.assertAlmostEqual(self.inv.soc, 45.0, delta=0.06)   # ... and then it stays there
+        self.inv.update_settings({"time_speed": 1})
+        self.inv.set_plant(soc=45)
+        f = self.flows()
+        self.assertEqual((f["discharge"], f["charge"], f["grid_net"]), (0.0, 0.0, 625.0))    # inverter on the grid too
+        self.wall = at(7, 0)                                     # slot over, limit still up: battery stays locked
+        self.assertEqual(self.flows()["discharge"], 0.0)
+        self.inv.modbus_write(3067, [10], fc=16)                 # the morning release
+        self.mono += 1.0
+        self.assertEqual(self.flows()["discharge"], 625.0)
 
     def test_charging_stops_at_the_stop_soc(self) -> None:
         self.wall = at(22, 0)

@@ -35,6 +35,7 @@ TOU_SLOT_REGS = (3038, 3040, 3042, 3044, 3050, 3052)
 REG_CHARGE_POWER = 3047
 REG_STOP_SOC = 3048
 REG_AC_CHARGE = 3049
+REG_DISCHARGE_STOP_SOC = 3067
 
 
 @dataclass(frozen=True)
@@ -116,6 +117,8 @@ REGISTERS: list[Reg] = [
     _inp(105, "fault_code",    "Fault code", role="param"),
     _inp(106, "warning_code",  "Warning code", role="param"),
     # ── Input registers, 3000 bank: read one value at a time ────────────────
+    _inp(3000, "status_3000",  "Inverter status", role="param", source="status", enum=STATUS_CODES,
+         note="same value as register 0; 0 = standby", used_by="night charge"),
     _inp(3005, "pv1_w",        "PV1 power", count=2, dtype="u32", role="param", unit="W", scale=0.1,
          note="same value as register 5"),
     _inp(3009, "pv2_w",        "PV2 power", count=2, dtype="u32", role="param", unit="W", scale=0.1,
@@ -136,6 +139,9 @@ REGISTERS: list[Reg] = [
     Reg("holding", REG_AC_CHARGE, "ac_charge", "AC (grid) charge", role="rw", enum=ONOFF,
         used_by="night charge", note="FC06 works"),
     *_slot(5, 3050), *_slot(6, 3052),
+    Reg("holding", REG_DISCHARGE_STOP_SOC, "discharge_stop_soc", "On-grid discharge stop SoC", role="rw", unit="%",
+        used_by="night charge",
+        note="no discharge at or below it; below it the inverter charges from the grid"),
 ]
 
 # Resting state of the live inverter (holding-register scan of 2026-11-16): every slot disabled,
@@ -148,6 +154,7 @@ HOLDING_DEFAULTS: dict[int, int] = {
     3047: 100, 3048: 100, 3049: 0,
     3050: 0x1000, 3051: 0x1600,     # slot 5  load first     16:00-22:00
     3052: 0x4C00, 3053: 0x0E00,     # slot 6  grid first     12:00-14:00
+    3067: 10,                       # on-grid discharge stop SoC
 }
 
 REG_BY_RID: dict[str, Reg] = {r.rid: r for r in REGISTERS}

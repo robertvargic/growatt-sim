@@ -16,6 +16,12 @@ Energy balance, recomputed on every read:
         as well when AC charge (3049) is on and SoC is below the stop SoC.
     grid first
         the battery discharges at full power; the surplus is exported.
+    in every mode
+        the battery is not discharged at or below the on-grid discharge stop SoC
+        (3067); below it the inverter charges it from the grid until it is there.
+        With "Inverter self-use" set, the inverter takes that power from the
+        battery whenever the battery may discharge (also in battery first), and
+        from the grid otherwise.
 
 Seen on the real inverter and reproduced here (see README):
 
@@ -24,6 +30,12 @@ Seen on the real inverter and reproduced here (see README):
 - Register 3047 limits the charge power: 50 % was 4.8 kW.
 - Switching grid charge on inside the window starts charging within seconds;
   outside the window it only arms the inverter.
+- A battery-first slot without grid charge keeps the battery from feeding the
+  house, but the inverter still runs itself off the battery (~225 W, 2026-11-17).
+- The on-grid discharge stop SoC (3067) above the battery's level charges it
+  from the grid with grid charge off: ~1.17 kW when far below, a ~35 W trickle
+  for the last point.  At the limit the battery is at 0 W and the inverter takes
+  its own power from the grid (2026-11-17).
 """
 
 from __future__ import annotations
@@ -50,6 +62,10 @@ EXC_NAMES = {1: "illegal function", 2: "illegal data address", 3: "illegal data 
              4: "server device failure", 6: "server device busy"}
 
 MPPT_VOLTS = (240.0, 600.0)        # 6 panels on MPPT1 (north), 15 on MPPT2 (south)
+# Grid charge the inverter starts by itself while the battery is below the on-grid discharge
+# stop SoC (measured 2026-11-17 with AC charge off): the full rate when more than a point is
+# missing (18 % against a limit of 71), a trickle for the last point (19 % against 20).
+RESERVE_CHARGE_W, RESERVE_TRICKLE_W = 1170.0, 35.0
 # What the controller holds back for the battery with its default settings.
 CTRL_RESERVE_W, CTRL_FULL_SOC = 3000.0, 90
 
@@ -85,7 +101,13 @@ SETTINGS_META: list[dict] = [
     {"key": "min_soc", "group": "plant", "type": "number", "default": 10,
      "min": 0, "max": 100, "unit": "%",
      "label": "Discharge stops at",
-     "help": "Below this SoC the battery no longer discharges."},
+     "help": "The battery's own floor. The on-grid discharge stop SoC (register 3067) can only raise it."},
+    {"key": "self_use_w", "group": "plant", "type": "number", "default": 0.0,
+     "min": 0, "max": 2000, "unit": "W",
+     "label": "Inverter self-use",
+     "help": "What the inverter needs to run when there is no sun. It takes it from the battery whenever "
+             "the battery may discharge, also in a battery-first slot, and from the grid otherwise. "
+             "Measured: about 225 W. 0 leaves it out of the balance."},
     {"key": "time_speed", "group": "plant", "type": "number", "default": 1.0,
      "min": 0, "max": 3600, "unit": "×",
      "label": "Battery and energy speed",
@@ -313,7 +335,8 @@ class Inverter:
         limit_w = float(s["max_charge_kw"]) * 1000.0 * min(100, self.holding[R.REG_CHARGE_POWER]) / 100.0
         max_dis = float(s["max_discharge_kw"]) * 1000.0
         can_charge = self.soc < 100.0 - 1e-9
-        can_discharge = self.soc > float(s["min_soc"]) + 1e-9
+        stop_soc = float(self.holding[R.REG_DISCHARGE_STOP_SOC])
+        can_discharge = self.soc > max(float(s["min_soc"]), stop_soc) + 1e-9
         charge = discharge = 0.0
         grid_charge = False
         if mode == R.PRIO_BATTERY:
@@ -332,14 +355,26 @@ class Inverter:
                 charge = min(surplus, limit_w)
             elif surplus < 0 and can_discharge:
                 discharge = min(-surplus, max_dis)
-        grid_net = load + charge - discharge - pv          # > 0 import, < 0 export
+        # Below the on-grid discharge stop SoC the inverter brings the battery up to it from the
+        # grid, whatever the mode and whether or not AC charge is on.
+        missing = stop_soc - self.soc
+        reserve_charge = can_charge and missing > 1e-9 and mode != R.PRIO_GRID
+        if reserve_charge:
+            charge = max(charge, min(limit_w, RESERVE_CHARGE_W if missing > 1.0 else RESERVE_TRICKLE_W))
+        # The inverter's own consumption when the sun does not cover it: from the battery if the
+        # battery may discharge (also in a battery-first slot), else from the grid.
+        own = float(s["self_use_w"]) if pv < float(s["self_use_w"]) else 0.0
+        own_from_battery = own if (can_discharge and charge <= 0) else 0.0
+        discharge += own_from_battery
+        grid_net = load + charge - discharge + own - pv    # > 0 import, < 0 export
         return {
             "pv1": pv1, "pv2": pv2, "pv": pv, "house": house, "ev": ev, "load": load,
             "charge": charge, "discharge": discharge, "grid_net": grid_net,
             "import": max(0.0, grid_net), "export": max(0.0, -grid_net),
-            "pac": max(0.0, pv + discharge - charge),
+            "pac": max(0.0, pv + discharge - charge - own),
             "mode": mode, "slot": slot["n"] if slot else None,
             "grid_charge": grid_charge, "charge_limit_w": limit_w,
+            "reserve_charge": reserve_charge, "discharge_stop_soc": stop_soc, "self_use": own,
         }
 
     def _values(self, flows: Optional[dict] = None) -> dict:
@@ -397,14 +432,17 @@ class Inverter:
     def _note_mode(self) -> None:
         """Log when the battery mode changes (a slot opens, grid charge starts or stops)."""
         f = self._flows()
-        mode = (f["mode"], f["slot"], f["grid_charge"])
+        mode = (f["mode"], f["slot"], f["grid_charge"], f["reserve_charge"])
         if mode == self._last_mode:
             return
         first = self._last_mode is None
         self._last_mode = mode
         if first:
             return
-        if f["mode"] == R.PRIO_LOAD:
+        if f["reserve_charge"] and not f["grid_charge"]:
+            self._event(f"Battery below the on-grid discharge stop SoC ({f['discharge_stop_soc']:.0f} %): "
+                        f"charging from the grid at {f['charge']:.0f} W until it is reached")
+        elif f["mode"] == R.PRIO_LOAD:
             self._event("Battery mode: load first (no TOU slot active)")
         elif f["grid_charge"]:
             self._event(f"Battery mode: battery first (TOU slot {f['slot']}) — charging from the grid "
@@ -536,7 +574,7 @@ class Inverter:
             hour, minute = R.decode_tou_end(value)
             if hour > 23 or minute > 59 or value >> 13:
                 raise ModbusError(EXC_ILLEGAL_VALUE, f"{reg.label}: 0x{value:04X} is not a valid time")
-        elif reg.key in ("charge_power_pct", "stop_soc") and value > 100:
+        elif reg.key in ("charge_power_pct", "stop_soc", "discharge_stop_soc") and value > 100:
             raise ModbusError(EXC_ILLEGAL_VALUE, f"{reg.label}: {value} % is more than 100")
         elif reg.enum is not None and value not in reg.enum:
             raise ModbusError(EXC_ILLEGAL_VALUE, f"{reg.label} = {value} is not a valid value")
@@ -813,6 +851,7 @@ class Inverter:
                 "slots": self._slots(),
                 "charge_power_pct": self.holding[R.REG_CHARGE_POWER],
                 "stop_soc": self.holding[R.REG_STOP_SOC],
+                "discharge_stop_soc": self.holding[R.REG_DISCHARGE_STOP_SOC],
                 "ac_charge": bool(self.holding[R.REG_AC_CHARGE]),
                 "pending": [{"addr": p["addr"], "value": p["value"],
                              "in_ms": max(0, round((p["due"] - now) * 1000))} for p in self.pending],

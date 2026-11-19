@@ -181,6 +181,7 @@ Holding registers, FC03 to read, FC06 or FC16 to write.
 | 3047 | Battery charge power | % |
 | 3048 | Charge stop SoC | % |
 | 3049 | AC (grid) charge | 0 / 1 |
+| 3067 | On-grid discharge stop SoC | % |
 
 The holding registers start with the values of the live inverter at rest (scan
 of 2026-11-16): all slots off, 100 %, grid charge off. `--baseline FILE` loads a
@@ -201,14 +202,36 @@ simulator does not model answer with the scanned values instead of 0.
 - Grid charge switched on inside a battery-first slot charges within the same
   second; outside it only arms the inverter until the slot opens.
 - A slot whose end is before its start never runs.
+- A battery-first slot without grid charge keeps the battery from feeding the
+  house, but the inverter still runs itself off the battery, about 225 W
+  (2026-11-17). Set *Inverter self-use* to 225 to see it; it is 0 by default so
+  that the balance stays easy to read.
+- The on-grid discharge stop SoC (3067): the battery is not discharged at or
+  below it. Below it the inverter charges the battery from the grid although
+  grid charge is off: 1.17 kW when more than a point is missing, a 35 W trickle
+  for the last point. At the limit the battery is at 0 W and the inverter takes
+  its own power from the grid (2026-11-17). The controller's night hold raises
+  it to the battery's level and puts 10 % back in the morning.
 
 **Assumptions** (not verified on the inverter)
 
 - The energy balance itself: load first means PV feeds the load, then the
   battery, then the grid; a deficit comes from the battery down to 10 % SoC, then
   from the grid. Nothing is clipped at the inverter's rated power.
-- Battery first without grid charge charges from PV only and does not discharge.
-  Grid first discharges at full power.
+- Battery first without grid charge charges from PV only. Grid first discharges
+  at full power.
+- Register 3067 takes FC06 as well as FC16. On the inverter that was not known
+  when this was written; the controller tries FC06 first and falls back to FC16.
+- Below the on-grid discharge stop SoC the charge rate also respects register
+  3047, and it does not happen in a grid-first slot.
+- The inverter's own consumption is the same whether the battery or the grid
+  supplies it (measured: 225 W from the battery, 120 W from the grid when idle
+  at the limit), and it is only counted when the sun gives less than that.
+- **Standby is not modelled.** On the real inverter a battery held at its limit
+  sends the inverter into standby after about 15 minutes, and it then does not
+  wake up when the limit is lowered: only at first light, or for a grid charge
+  (2026-11-17). The simulated battery takes the house back the moment the limit
+  is lowered.
 - The start-word quirk applies to all six slots (it was seen on 3042).
 - Values that make no sense are refused with exception 03: more than 100 %, an
   hour above 23, a grid-charge value other than 0 or 1.
@@ -233,6 +256,9 @@ simulator does not model answer with the scanned values instead of 0.
 | Garbage on the line | Modbus link = *Reply with a bad CRC* |
 | Night charge switched on by the controller | Watch 3038–3049 flash, then *Applied* in the traffic 0.4 s later |
 | Charging inside the window | Set the inverter clock into a slot; the battery tile shows the charge |
+| Night hold (no charge tonight) | After a controller start the slots are on and grid charge is off. Set the inverter clock into a slot: the house runs on the grid; set it to 07:00 and the battery takes over again. The controller follows the Pi's clock: it raises 3067 to the battery's level when its own window opens and puts 10 % back at 07:00 |
+| Why the slots alone are not enough | Set *Inverter self-use* to 225 and the inverter clock into a slot: the battery still gives 225 W. Set 3067 to the SoC: it gives nothing |
+| A discharge limit above the battery's level | Set 3067 well above the SoC: the battery charges from the grid at 1.17 kW with grid charge off |
 | Somebody changed the settings in the app | Edit a slot or the charge power under Battery settings; the guard reports the difference |
 | Switched on, but not charging | Grid charge on and slot active, then pin *Battery charge* to 0 |
 | A different inverter state at start | `--baseline ~/gw_debug/gw_scan.json` |
